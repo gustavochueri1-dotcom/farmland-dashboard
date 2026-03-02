@@ -7,7 +7,8 @@ import { formatDate, formatValue } from '../utils/dataUtils'
 
 function CustomTooltip({ active, payload, label, isBRL, isIndex }) {
   if (!active || !payload || !payload.length) return null
-  const date = new Date(label)
+  const date = new Date(Number(label))
+
   return (
     <div style={{
       background: 'rgba(10,14,23,0.97)',
@@ -23,10 +24,13 @@ function CustomTooltip({ active, payload, label, isBRL, isIndex }) {
         {formatDate(date)}
       </div>
       {payload.map(entry => (
-        <div key={entry.dataKey} style={{
-          display: 'flex', justifyContent: 'space-between', gap: 16,
-          marginBottom: 3, alignItems: 'center',
-        }}>
+        <div
+          key={entry.dataKey}
+          style={{
+            display: 'flex', justifyContent: 'space-between', gap: 16,
+            marginBottom: 3, alignItems: 'center',
+          }}
+        >
           <span style={{
             color: entry.color,
             fontSize: 11,
@@ -40,7 +44,7 @@ function CustomTooltip({ active, payload, label, isBRL, isIndex }) {
           </span>
           <span style={{ fontWeight: 700, whiteSpace: 'nowrap', color: entry.color }}>
             {isIndex
-              ? entry.value.toFixed(1)
+              ? Number(entry.value).toFixed(1)
               : formatValue(entry.value, isBRL)}
           </span>
         </div>
@@ -57,16 +61,18 @@ function CustomLegend({ payload }) {
       padding: '10px 8px 4px', justifyContent: 'center',
     }}>
       {payload.map(entry => (
-        <div key={entry.value} style={{
-          display: 'flex', alignItems: 'flex-start', gap: 6,
-          fontSize: 10, color: 'var(--text-secondary)',
-          maxWidth: 260,
-        }}>
+        <div
+          key={entry.value}
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 6,
+            fontSize: 10, color: 'var(--text-secondary)',
+            maxWidth: 260,
+          }}
+        >
           <div style={{
             width: 18, height: 2.5, background: entry.color,
             borderRadius: 2, flexShrink: 0, marginTop: 4,
           }} />
-          {/* Never truncate — show the full label, allow line-wrapping */}
           <span style={{ lineHeight: 1.4, wordBreak: 'break-word' }}>
             {entry.value}
           </span>
@@ -86,6 +92,9 @@ function CustomLegend({ payload }) {
 export default function DashboardChart({ series, slicedDates, isBRL = true, isIndex = false }) {
   const [activeLine, setActiveLine] = useState(null)
 
+  // Mobile detection (simple & enough for your use-case)
+  const isMobile = window.innerWidth < 768
+
   // Build flat chart data array from pre-sliced values + dates
   const chartData = slicedDates.map((date, i) => {
     const point = { ts: date.getTime() }
@@ -96,62 +105,80 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
     return point
   })
 
-  const tickFormatter = useCallback(ts => formatDate(new Date(ts)), [])
+  const tickFormatter = useCallback(ts => formatDate(new Date(Number(ts))), [])
 
   const yFormatter = useCallback(v => {
     if (!isFinite(v)) return ''
-    if (isIndex) return v.toFixed(0)
+    if (isIndex) return Number(v).toFixed(0)
     if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
     if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`
-    return v.toFixed(0)
+    return Number(v).toFixed(0)
   }, [isIndex])
 
   const totalPoints = slicedDates.length
-  const minTickGap = 50
-  // Show roughly 8-10 ticks
-  const interval = Math.max(0, Math.floor(totalPoints / 10) - 1)
+
+  // Fewer ticks on mobile to avoid overlap
+  const interval = isMobile
+    ? Math.max(0, Math.floor(totalPoints / 6) - 1)
+    : Math.max(0, Math.floor(totalPoints / 10) - 1)
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis
-          dataKey="ts"
-          type="number"
-          scale="time"
-          domain={['dataMin', 'dataMax']}
-          tickFormatter={tickFormatter}
-          interval={interval}
-          tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-          tickLine={false}
-          axisLine={{ stroke: 'var(--border)' }}
-          minTickGap={minTickGap}
-        />
+    <ResponsiveContainer width="100%" height={isMobile ? 420 : 600}>
+      <LineChart
+        data={chartData}
+        margin={{
+          top: 20,
+          right: 20,
+          left: 10,
+          bottom: isMobile ? 80 : 20,
+        }}
+      >
+        <CartesianGrid strokeDasharray="3 3" />
+
+<XAxis
+  dataKey="ts"
+  type="number"
+  scale="time"
+  domain={['dataMin', 'dataMax']}
+  tickFormatter={tickFormatter}
+  interval={isMobile ? Math.ceil(totalPoints / 2) : interval}
+  tick={{ fontSize: 10 }}
+  tickLine={false}
+  axisLine={false}
+  minTickGap={isMobile ? 90 : 20}
+  angle={isMobile ? -45 : 0}
+  textAnchor={isMobile ? "end" : "middle"}
+  height={isMobile ? 70 : 30}
+/>
+
         <YAxis
           tickFormatter={yFormatter}
-          tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+          tick={{ fontSize: 10 }}
           tickLine={false}
           axisLine={false}
-          width={56}
         />
+
         <Tooltip
           content={<CustomTooltip isBRL={isBRL} isIndex={isIndex} />}
-          isAnimationActive={false}
+          labelFormatter={(label) => formatDate(new Date(Number(label)))}
         />
-        <Legend content={<CustomLegend />} />
-        {series.map(s => (
+
+        <Legend
+          content={<CustomLegend />}
+          layout={isMobile ? 'vertical' : 'horizontal'}
+          verticalAlign={isMobile ? 'bottom' : 'top'}
+        />
+
+        {series.map((s) => (
           <Line
             key={s.id}
             type="monotone"
             dataKey={s.id}
             name={s.label}
             stroke={s.color}
-            strokeWidth={activeLine === s.id ? 3 : 1.8}
+            strokeWidth={activeLine && activeLine !== s.id ? 1.5 : 2}
             dot={false}
-            activeDot={{ r: 5, strokeWidth: 0, fill: s.color }}
-            connectNulls={false}
-            isAnimationActive={false}
-            opacity={activeLine && activeLine !== s.id ? 0.25 : 1}
+            opacity={activeLine && activeLine !== s.id ? 0.3 : 1}
             onMouseEnter={() => setActiveLine(s.id)}
             onMouseLeave={() => setActiveLine(null)}
           />
