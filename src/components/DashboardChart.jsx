@@ -105,6 +105,28 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
     return point
   })
 
+  // MOBILE: force exactly 6 X-axis labels (start, 4 middle, end)
+  const mobileTicks = (() => {
+    if (!isMobile) return null
+    if (!chartData || chartData.length === 0) return null
+
+    const n = chartData.length
+    const idxs = []
+    for (let i = 0; i < 6; i++) {
+      idxs.push(Math.round((n - 1) * (i / 5)))
+    }
+
+    // ensure unique + sorted
+    const uniq = Array.from(new Set(idxs)).sort((a, b) => a - b)
+
+    // map to timestamps (numbers only)
+    const ticks = uniq
+      .map(i => chartData[i]?.ts)
+      .filter(v => typeof v === 'number' && Number.isFinite(v))
+
+    return ticks.length ? ticks : null
+  })()
+
   const tickFormatter = useCallback(ts => formatDate(new Date(Number(ts))), [])
 
   const yFormatter = useCallback(v => {
@@ -117,10 +139,8 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
 
   const totalPoints = slicedDates.length
 
-  // Fewer ticks on mobile to avoid overlap
-  const interval = isMobile
-    ? Math.max(0, Math.floor(totalPoints / 6) - 1)
-    : Math.max(0, Math.floor(totalPoints / 10) - 1)
+  // Keep your existing desktop behavior. Mobile interval is ignored because we force ticks + interval=0.
+  const interval = Math.max(0, Math.floor(totalPoints / 10) - 1)
 
   return (
     <ResponsiveContainer width="100%" height={isMobile ? 420 : 600}>
@@ -135,21 +155,21 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
       >
         <CartesianGrid strokeDasharray="3 3" />
 
-<XAxis
-  dataKey="ts"
-  type="number"
-  scale="time"
-  domain={['dataMin', 'dataMax']}
-  tickFormatter={tickFormatter}
-  interval={isMobile ? Math.ceil(totalPoints / 2) : interval}
-  tick={{ fontSize: 10 }}
-  tickLine={false}
-  axisLine={false}
-  minTickGap={isMobile ? 90 : 20}
-  angle={isMobile ? -45 : 0}
-  textAnchor={isMobile ? "end" : "middle"}
-  height={isMobile ? 70 : 30}
-/>
+        <XAxis
+          dataKey="ts"
+          type="number"
+          scale="time"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={tickFormatter}
+          ticks={isMobile && mobileTicks ? mobileTicks : undefined}
+          interval={isMobile ? 0 : interval}
+          tick={{ fontSize: 10 }}
+          tickLine={false}
+          axisLine={false}
+          minTickGap={isMobile ? 9999 : 20}
+          angle={isMobile ? -35 : 0}
+          textAnchor={isMobile ? 'end' : 'middle'}
+        />
 
         <YAxis
           tickFormatter={yFormatter}
