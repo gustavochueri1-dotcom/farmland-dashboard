@@ -186,65 +186,51 @@ export function computeLandBase100(prices, startIdx, endIdx) {
  * @param {number} endIdx       – index into landDates for the period end
  * @returns {number[]}          – array of length (endIdx − startIdx + 1), starts at 100
  */
+function normalizeMonthlyReturn(x) {
+  if (x == null || !Number.isFinite(x)) return 0
+  return Math.abs(x) > 1 ? x / 100 : x
+}
+
+function nearestIndex(sortedTs, targetTs) {
+  let lo = 0, hi = sortedTs.length - 1
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (sortedTs[mid] < targetTs) lo = mid + 1
+    else hi = mid
+  }
+  const after = lo
+  const before = Math.max(0, lo - 1)
+  if (before === after) return after
+  return (Math.abs(sortedTs[after] - targetTs) < Math.abs(targetTs - sortedTs[before]))
+    ? after
+    : before
+}
+
 export function computeBenchmarkBase100(benchSeries, landDates, startIdx, endIdx) {
-  if (!benchSeries || !benchSeries.dates || benchSeries.dates.length === 0) {
+  if (!benchSeries?.dates?.length || !benchSeries?.values?.length) {
     console.warn('[benchmark] Empty series:', benchSeries?.name)
     return Array(endIdx - startIdx + 1).fill(null)
   }
 
-  const sliceDates = landDates.slice(startIdx, endIdx + 1)
+  // 1) base-100 on benchmark's own timeline
+  const benchTs = benchSeries.dates.map(d => d.getTime())
+  const base = []
+  let idx = 100
 
-  // Build month map: YYYYMM (e.g. 200201 = Jan 2002) → decimal monthly return
-  // Values are decimals, e.g. 0.0139 means 1.39% per month
-  const monthMap = new Map()
-  benchSeries.dates.forEach((d, i) => {
-    const k = d.getUTCFullYear() * 100 + (d.getUTCMonth() + 1)
-    if (!monthMap.has(k)) monthMap.set(k, benchSeries.values[i])
-  })
-
-  console.log(
-    `[benchmark] "${benchSeries.name}" n=${benchSeries.dates.length}` +
-    ` monthMap=${monthMap.size} sample=${JSON.stringify(benchSeries.values.slice(0, 3))}` +
-    ` firstDate=${benchSeries.dates[0]?.toISOString().slice(0, 7)}`
-  )
-
-  // index = 100 at sliceDates[0].
-  // For each subsequent land date, compound every monthly return from
-  // (prevDate's month + 1) through curDate's month, inclusive.
-  //
-  // Uses pure integer year/month arithmetic to avoid JavaScript's
-  // Date.setUTCMonth() day-overflow bug (e.g. Jan-31 + 1 month → Mar-03).
-  let index = 100
-  const result = [100]
-
-  for (let i = 1; i < sliceDates.length; i++) {
-    const prevDate = sliceDates[i - 1]
-    const curDate  = sliceDates[i]
-
-    // Integer year/month of the first month to accumulate
-    let y = prevDate.getUTCFullYear()
-    let m = prevDate.getUTCMonth() + 1  // 1-based (1=Jan … 12=Dec)
-    m += 1
-    if (m > 12) { m = 1; y += 1 }
-
-    const endY = curDate.getUTCFullYear()
-    const endM = curDate.getUTCMonth() + 1  // 1-based
-
-    // e.g. prevDate=Dec/01 → start Jan/02; curDate=Feb/02 → stop after Feb/02
-    // Accumulates: index = index * (1 + r) for each month in [Jan/02 … Feb/02]
-    while (y < endY || (y === endY && m <= endM)) {
-      const key = y * 100 + m
-      const r   = monthMap.get(key)
-      if (r != null && isFinite(r)) {
-        index *= (1 + r)
-      }
-      m += 1
-      if (m > 12) { m = 1; y += 1 }
-    }
-
-    result.push(index)
+  for (let i = 0; i < benchSeries.values.length; i++) {
+    const r = normalizeMonthlyReturn(benchSeries.values[i])
+    if (i === 0) idx = 100
+    else idx *= (1 + r)
+    base.push(idx)
   }
 
-  console.log(`[benchmark] "${benchSeries.name}" result: ${result.length} pts first=${result[0]?.toFixed(1)} last=${result[result.length - 1]?.toFixed(1)}`)
-  return result
+  // 2) resample to land dates (nearest benchmark date)
+  const out = []
+  for (let i = startIdx; i <= endIdx; i++) {
+    const ts = landDates[i].getTime()
+    const j = nearestIndex(benchTs, ts)
+    out.push(Number.isFinite(base[j]) ? base[j] : null)
+  }
+
+  return out
 }

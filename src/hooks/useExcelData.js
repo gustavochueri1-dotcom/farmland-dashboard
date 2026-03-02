@@ -8,29 +8,94 @@ function excelDateToJS(serial) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Bench parsing helpers (robust to empty leading columns / different ranges)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isExcelSerialDate(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v > 25000 && v < 60000
+}
+
+function normalizeDateCell(v) {
+  if (v == null) return null
+
+  // Excel serial
+  if (isExcelSerialDate(v)) return excelDateToJS(v)
+
+  // XLSX may return Date
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return new Date(Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate()))
+  }
+
+  // String like "31/12/2001"
+  if (typeof v === 'string') {
+    const s = v.trim()
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+    if (m) {
+      const dd = Number(m[1])
+      const mm = Number(m[2]) - 1
+      const yyyy = Number(m[3])
+      const d = new Date(Date.UTC(yyyy, mm, dd))
+      return isNaN(d.getTime()) ? null : d
+    }
+
+    // fallback: Date parse
+    const d2 = new Date(s)
+    if (!isNaN(d2.getTime())) {
+      return new Date(Date.UTC(d2.getUTCFullYear(), d2.getUTCMonth(), d2.getUTCDate()))
+    }
+  }
+
+  return null
+}
+
+function findHeaderAndDateCol(rows) {
+  // Find a row containing "Monthly Returns"
+  const headerRowIdx = rows.findIndex(r =>
+    r?.some(c => typeof c === 'string' && c.toLowerCase().includes('monthly returns'))
+  )
+
+  const hdr = headerRowIdx >= 0 ? headerRowIdx : 0
+  const headerRow = rows[hdr] || []
+
+  // Date col = where "Monthly Returns" lives
+  let dateCol = headerRow.findIndex(
+    c => typeof c === 'string' && c.toLowerCase().includes('monthly returns')
+  )
+
+  // Fallback: probe next row(s) and pick first date-like column
+  if (dateCol < 0) {
+    const probe = rows[hdr + 1] || rows[0] || []
+    dateCol = probe.findIndex(v => normalizeDateCell(v))
+  }
+
+  if (dateCol < 0) dateCol = 0
+  return { hdr, dateCol }
+}
 
 // Fixed column layouts confirmed from direct Excel inspection.
-// Col B (idx 1) = date. Values are decimal monthly returns (0.0139 = 1.39%).
+// Now expressed as OFFSETS relative to the date column.
 const BRL_BENCH_COLS = [
-  { idx: 2, name: 'CDI' },
-  { idx: 3, name: 'IPCA' },
-  { idx: 4, name: 'IBOV' },
-  { idx: 5, name: 'S&P' },
-  { idx: 6, name: 'NASDAQ' },
+  { off: 1, name: 'CDI' },
+  { off: 2, name: 'IPCA' },
+  { off: 3, name: 'IBOV' },
+  { off: 4, name: 'S&P' },
+  { off: 5, name: 'NASDAQ' },
 ]
 const USD_BENCH_COLS = [
-  { idx: 2, name: 'S&P' },
-  { idx: 3, name: 'NASDAQ' },
-  { idx: 4, name: 'Gold' },
-  { idx: 5, name: 'CPI' },
-  { idx: 6, name: '3-Month Treasury' },
+  { off: 1, name: 'S&P' },
+  { off: 2, name: 'NASDAQ' },
+  { off: 3, name: 'Gold' },
+  { off: 4, name: 'CPI' },
+  { off: 5, name: '3-Month Treasury' },
 ]
 
 /**
- * Parse a benchmark sheet using fixed column positions.
- * Date = col B (index 1), Excel serial → JS Date.
- * Values = cols specified in `columns`, decimal monthly returns.
- * Skips rows until col B contains an Excel date serial (> 25000).
+ * Parse a benchmark sheet robustly.
+ * - Detect date column via the header cell containing "Monthly Returns"
+ *   (or fallback: first date-like column).
+ * - Accept Excel serial dates, Date objects, or dd/mm/yyyy strings.
+ * - Read values by offsets relative to dateCol.
  */
 function parseBenchmarkSheet(rows, columns, label = 'sheet') {
   if (!rows || rows.length < 2) {
@@ -38,33 +103,41 @@ function parseBenchmarkSheet(rows, columns, label = 'sheet') {
     return {}
   }
 
-  // Find first data row: col B (idx 1) must be a number > 25000 (Excel date serial)
+  const { hdr, dateCol } = findHeaderAndDateCol(rows)
+
+  // Find first data row below header where date cell exists
   let firstDataRowIdx = -1
-  for (let r = 0; r < rows.length; r++) {
-    const v = (rows[r] || [])[1]
-    if (typeof v === 'number' && v > 25000) { firstDataRowIdx = r; break }
+  for (let r = hdr + 1; r < rows.length; r++) {
+    const dt = normalizeDateCell((rows[r] || [])[dateCol])
+    if (dt) { firstDataRowIdx = r; break }
   }
+
   if (firstDataRowIdx === -1) {
-    console.warn(`[bench:${label}] No date row found`)
+    console.warn(
+      `[bench:${label}] No date row found (hdr=${hdr}, dateCol=${dateCol}).`,
+      'Sample:', rows.slice(0, 6)
+    )
     return {}
   }
-  console.log(`[bench:${label}] first data row=${firstDataRowIdx}, cols:`, columns.map(c => `[${c.idx}]=${c.name}`))
 
-  // Parse data rows
+  console.log(
+    `[bench:${label}] hdrRow=${hdr}, dateCol=${dateCol}, firstDataRow=${firstDataRowIdx}, cols:`,
+    columns.map(c => `[dateCol+${c.off}]=${c.name}`)
+  )
+
   const series = {}
   columns.forEach(({ name }) => { series[name] = { name, dates: [], values: [] } })
 
   for (let r = firstDataRowIdx; r < rows.length; r++) {
     const row = rows[r]
     if (!row) continue
-    const rawDate = row[1]
-    if (typeof rawDate !== 'number' || rawDate <= 25000) continue
-    const date = excelDateToJS(rawDate)
+
+    const date = normalizeDateCell(row[dateCol])
     if (!date || isNaN(date.getTime())) continue
 
-    columns.forEach(({ idx, name }) => {
-      const v = row[idx]
-      const num = parseFloat(v)
+    columns.forEach(({ off, name }) => {
+      const v = row[dateCol + off]
+      const num = (typeof v === 'number') ? v : parseFloat(v)
       if (v != null && !isNaN(num) && isFinite(num)) {
         series[name].dates.push(date)
         series[name].values.push(num)
@@ -76,9 +149,11 @@ function parseBenchmarkSheet(rows, columns, label = 'sheet') {
     if (!series[name].dates.length) delete series[name]
   })
 
-  console.log(`[bench:${label}] final series:`,
+  console.log(
+    `[bench:${label}] final series:`,
     Object.keys(series).map(k => `${k}(${series[k].dates.length} pts, first=${series[k].values[0]})`)
   )
+
   return series
 }
 
@@ -108,8 +183,8 @@ export function useExcelData() {
         const usdBenchSh  = findSheet('USD Benchmarks')
 
         const opts = { header: 1, raw: true, defval: null }
-        const brlRaw = XLSX.utils.sheet_to_json(brlSheet,   opts)
-        const usdRaw = XLSX.utils.sheet_to_json(usdSheet,   opts)
+        const brlRaw = XLSX.utils.sheet_to_json(brlSheet, opts)
+        const usdRaw = XLSX.utils.sheet_to_json(usdSheet, opts)
 
         // Row index 1 = Excel row 2 = date headers starting at column G (index 6)
         const dateRow = brlRaw[1] || []
@@ -140,18 +215,26 @@ export function useExcelData() {
           landData.push({
             id: `land_${i}`,
             rowIndex: i,
-            state:       String(bRow[1] || '').trim(),
-            municipality:String(bRow[2] || '').trim(),
-            group:       String(bRow[3] || '').trim(),
-            specificUse: String(bRow[4] || '').trim(),
-            yieldLevel:  String(bRow[5] || '').trim(),
+            state:        String(bRow[1] || '').trim(),
+            municipality: String(bRow[2] || '').trim(),
+            group:        String(bRow[3] || '').trim(),
+            specificUse:  String(bRow[4] || '').trim(),
+            yieldLevel:   String(bRow[5] || '').trim(),
             brlPrices,
             usdPrices,
           })
         }
 
-        const brlBenchmarks = parseBenchmarkSheet(XLSX.utils.sheet_to_json(brlBenchSh, opts), BRL_BENCH_COLS, 'BRL')
-        const usdBenchmarks = parseBenchmarkSheet(XLSX.utils.sheet_to_json(usdBenchSh, opts), USD_BENCH_COLS, 'USD')
+        const brlBenchmarks = parseBenchmarkSheet(
+          XLSX.utils.sheet_to_json(brlBenchSh, opts),
+          BRL_BENCH_COLS,
+          'BRL'
+        )
+        const usdBenchmarks = parseBenchmarkSheet(
+          XLSX.utils.sheet_to_json(usdBenchSh, opts),
+          USD_BENCH_COLS,
+          'USD'
+        )
 
         console.log('[useExcelData] BRL benchmark keys:', Object.keys(brlBenchmarks))
         console.log('[useExcelData] USD benchmark keys:', Object.keys(usdBenchmarks))

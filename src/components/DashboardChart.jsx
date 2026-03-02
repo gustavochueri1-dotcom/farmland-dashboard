@@ -105,26 +105,40 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
     return point
   })
 
-  // MOBILE: force exactly 6 X-axis labels (start, 4 middle, end)
-  const mobileTicks = (() => {
-    if (!isMobile) return null
-    if (!chartData || chartData.length === 0) return null
+  /**
+   * X-axis ticks
+   * - Mobile: exactly 6 labels (start, 4 middle, end)
+   * - Desktop: ~10 labels, ALWAYS includes last datapoint so if user selected To=Jun/25,
+   *   Jun/25 shows up on the axis.
+   */
+  const xTicks = (() => {
+    if (!chartData || chartData.length === 0) return undefined
 
     const n = chartData.length
+    const want = isMobile ? 6 : 10
+    if (n <= want) {
+      const all = chartData
+        .map(p => p?.ts)
+        .filter(v => typeof v === 'number' && Number.isFinite(v))
+      return all.length ? all : undefined
+    }
+
     const idxs = []
-    for (let i = 0; i < 6; i++) {
-      idxs.push(Math.round((n - 1) * (i / 5)))
+    for (let i = 0; i < want; i++) {
+      idxs.push(Math.round((n - 1) * (i / (want - 1))))
     }
 
     // ensure unique + sorted
     const uniq = Array.from(new Set(idxs)).sort((a, b) => a - b)
 
-    // map to timestamps (numbers only)
+    // GUARANTEE last tick = last datapoint
+    if (uniq[uniq.length - 1] !== n - 1) uniq.push(n - 1)
+
     const ticks = uniq
       .map(i => chartData[i]?.ts)
       .filter(v => typeof v === 'number' && Number.isFinite(v))
 
-    return ticks.length ? ticks : null
+    return ticks.length ? ticks : undefined
   })()
 
   const tickFormatter = useCallback(ts => formatDate(new Date(Number(ts))), [])
@@ -139,7 +153,8 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
 
   const totalPoints = slicedDates.length
 
-  // Keep your existing desktop behavior. Mobile interval is ignored because we force ticks + interval=0.
+  // Keep your existing desktop behavior if we weren't forcing ticks.
+  // (But once ticks are provided, we set interval=0 and ticks control the labels.)
   const interval = Math.max(0, Math.floor(totalPoints / 10) - 1)
 
   return (
@@ -161,8 +176,8 @@ export default function DashboardChart({ series, slicedDates, isBRL = true, isIn
           scale="time"
           domain={['dataMin', 'dataMax']}
           tickFormatter={tickFormatter}
-          ticks={isMobile && mobileTicks ? mobileTicks : undefined}
-          interval={isMobile ? 0 : interval}
+          ticks={xTicks}
+          interval={xTicks ? 0 : (isMobile ? 0 : interval)}
           tick={{ fontSize: 10 }}
           tickLine={false}
           axisLine={false}
