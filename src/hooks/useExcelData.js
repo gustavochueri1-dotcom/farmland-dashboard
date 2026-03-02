@@ -90,7 +90,7 @@ export function useExcelData() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch('/Excel - Farmland Dashboard - Dataset.xlsx')
+        const res = await fetch('/dataset.xlsx')
         if (!res.ok) throw new Error(`HTTP ${res.status}: failed to load farmland-data.xlsx`)
         const buf = await res.arrayBuffer()
         const wb = XLSX.read(buf, { type: 'array', raw: true })
